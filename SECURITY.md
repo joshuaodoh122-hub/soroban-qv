@@ -14,7 +14,7 @@ This policy covers the `soroban-qv-core` contract and the `grant-vote` example.
 
 **Do not open a public GitHub issue for security vulnerabilities.**
 
-Email: `security@your-org.example` (replace with your actual address).
+Email: `joshuaodoh122@gmail.com` (replace with your actual address).
 
 Please include:
 - A description of the vulnerability and its impact.
