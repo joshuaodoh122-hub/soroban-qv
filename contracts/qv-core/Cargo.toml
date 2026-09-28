@@ -1,0 +1,21 @@
+[package]
+name = "soroban-qv-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Quadratic Voting core boilerplate for Soroban smart contracts"
+repository = "https://github.com/your-org/soroban-qv"
+keywords = ["soroban", "stellar", "governance", "quadratic-voting", "dao"]
+categories = ["cryptography::cryptocurrencies"]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+soroban-sdk = { workspace = true }
+
+[dev-dependencies]
+soroban-sdk = { version = "22.0.7", features = ["testutils"] }
+
+[features]
+testutils = ["soroban-sdk/testutils"]

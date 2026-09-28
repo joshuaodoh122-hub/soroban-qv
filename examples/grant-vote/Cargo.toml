@@ -1,0 +1,21 @@
+[package]
+name = "grant-vote-example"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Example: community grant proposal voting built on soroban-qv-core"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+soroban-sdk = { workspace = true }
+soroban-qv-core = { path = "../../contracts/qv-core" }
+
+[dev-dependencies]
+soroban-sdk = { version = "22.0.7", features = ["testutils"] }
+soroban-qv-core = { path = "../../contracts/qv-core", features = ["testutils"] }
+
+[features]
+testutils = ["soroban-sdk/testutils", "soroban-qv-core/testutils"]

@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+    branches: ["main", "master"]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  # ── Formatting ──────────────────────────────────────────────────────────────
+  fmt:
+    name: Formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+        working-directory: soroban-qv
+
+  # ── Linting ─────────────────────────────────────────────────────────────────
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32v1-none
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: soroban-qv
+      - name: cargo clippy (native, for tests)
+        run: >
+          cargo clippy
+          --workspace
+          --all-features
+          -- -D warnings
+        working-directory: soroban-qv
+      - name: cargo clippy (wasm32v1-none, no std)
+        run: >
+          cargo clippy
+          --workspace
+          --target wasm32v1-none
+          -- -D warnings
+        working-directory: soroban-qv
+
+  # ── Tests ───────────────────────────────────────────────────────────────────
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: soroban-qv
+      - name: cargo test --workspace --all-features
+        run: cargo test --workspace --all-features
+        working-directory: soroban-qv
+
+  # ── WASM build ──────────────────────────────────────────────────────────────
+  build-wasm:
+    name: WASM Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32v1-none
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: soroban-qv
+      - name: cargo build --target wasm32v1-none --release
+        run: >
+          cargo build
+          --target wasm32v1-none
+          --release
+          -p soroban-qv-core
+          -p grant-vote-example
+        working-directory: soroban-qv
+      - name: Upload WASM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm-contracts
+          path: soroban-qv/target/wasm32v1-none/release/*.wasm
+          retention-days: 7
