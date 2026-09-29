@@ -42,15 +42,26 @@ change `u32 → u64` and recompute the safety analysis.
 
 ### Overflow protection summary
 
-| Overflow scenario                         | How handled                         |
-|------------------------------------------|-------------------------------------|
-| `prev_votes + num_votes` overflows `u32` | `checked_add` → `VoteCountOverflow` |
-| `new_total²` overflows `u64`             | `checked_mul` → `CostOverflow`      |
-| Option total votes overflows `u32`       | `checked_add` → panic (unreachable in practice) |
+| Overflow scenario                         | How handled                              |
+|------------------------------------------|------------------------------------------|
+| `prev_votes + num_votes` overflows `u32` | `checked_add` → `VoteCountOverflow`      |
+| `new_total²` overflows `u64`             | `checked_mul` → `CostOverflow`           |
+| Option aggregate total overflows `u32`   | `checked_add` → `OptionTotalOverflow`    |
+| `option_ids.len()` exceeds `MAX_OPTIONS` | early return → `TooManyOptions`          |
 
-The last case panics rather than returning an error because reaching `u32::MAX`
-total votes on a single option would require 4+ billion votes, which is
-economically impossible given the quadratic cost structure.
+The option aggregate overflow (`OptionTotalOverflow`) would require over 4 billion
+aggregate votes on a single option — economically implausible given the quadratic
+cost structure — but the contract returns a typed error rather than panicking.
+This is consistent with the rest of the error-handling philosophy.
+
+### Resource exhaustion: MAX_OPTIONS cap
+
+`create_round` validates options with an O(n²) duplicate check.  To bound the
+instruction cost, a `MAX_OPTIONS` constant (currently 50) is enforced before
+the loop.  At 50 options the inner loop runs at most 1 225 iterations, safely
+within Soroban's per-transaction CPU budget.  Any round requiring more than 50
+distinct options almost certainly has a UI/UX design problem rather than a
+genuine governance requirement.
 
 ---
 
