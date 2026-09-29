@@ -2,7 +2,7 @@
 
 **Quadratic Voting (QV) core boilerplate for Soroban smart contracts.**
 
-[![CI](https://github.com/your-org/soroban-qv/actions/workflows/ci.yml/badge.svg)](https://github.com/your-org/soroban-qv/actions/workflows/ci.yml)
+[![CI](https://github.com/joshuaodoh122-hub/soroban-qv-core/actions/workflows/ci.yml/badge.svg)](https://github.com/joshuaodoh122-hub/soroban-qv-core/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 ---
@@ -69,10 +69,10 @@ Creates a new voting round. Returns the `round_id`.
 | Parameter          | Type       | Description                                         |
 |--------------------|------------|-----------------------------------------------------|
 | `admin`            | `Address`  | Auth-required. Becomes the only address that can close this round. |
-| `option_ids`       | `Vec<u32>` | Non-empty list of distinct option identifiers.     |
+| `option_ids`       | `Vec<u32>` | Non-empty list of distinct option identifiers. Maximum [`MAX_OPTIONS`] (50) entries. |
 | `credits_per_voter`| `u64`      | Voice credits given to each voter (fixed per round). |
 
-**Errors:** `NoOptions`, `DuplicateOption`, `ZeroCredits`.
+**Errors:** `NoOptions`, `TooManyOptions`, `DuplicateOption`, `ZeroCredits`.
 
 ---
 
@@ -91,7 +91,7 @@ Cast votes on a single option. Quadratic cost is deducted from the voter's credi
 | `num_votes` | `u32`     | Additional votes to cast (≥ 1).              |
 
 **Errors:** `RoundNotFound`, `RoundNotOpen`, `InvalidOption`, `ZeroVotes`,
-`VoteCountOverflow`, `CostOverflow`, `InsufficientCredits`.
+`VoteCountOverflow`, `CostOverflow`, `InsufficientCredits`, `OptionTotalOverflow`.
 
 ---
 
@@ -122,6 +122,16 @@ they have not yet voted in this round.
 
 ---
 
+### `get_voter_option_votes(round_id, voter, option_id) → Result<u32, QVError>`
+
+Returns the cumulative number of votes a specific voter has cast on a specific
+option. Returns `0` if the voter has not yet voted on that option. Useful for
+voting UIs that need to display a voter's own ballot.
+
+**Errors:** `RoundNotFound`.
+
+---
+
 ## Quick Start
 
 ### Prerequisites
@@ -133,7 +143,6 @@ they have not yet voted in this round.
 ### Build
 
 ```bash
-cd soroban-qv
 cargo build --target wasm32v1-none --release -p soroban-qv-core
 ```
 
@@ -228,7 +237,7 @@ Genuinely planned, not aspirational filler:
 ## Project Structure
 
 ```
-soroban-qv/
+soroban-qv-core/
 ├── contracts/
 │   └── qv-core/         # Core QV contract (integrate this)
 │       └── src/
