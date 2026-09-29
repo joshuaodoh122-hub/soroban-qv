@@ -23,7 +23,6 @@ testnet. Steps are real and tested against the toolchain versions listed.
 ## Step 1: Build the WASM
 
 ```bash
-cd soroban-qv
 cargo build --target wasm32v1-none --release -p soroban-qv-core
 ```
 

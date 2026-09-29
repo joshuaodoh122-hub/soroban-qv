@@ -443,3 +443,128 @@ fn test_round_ids_are_monotonically_increasing() {
     assert!(r2 > r1);
     assert!(r3 > r2);
 }
+
+// ─── BUG 2: OptionTotalOverflow (typed error, not panic) ──────────────────────
+
+/// Verify that `add_option_votes` returns `OptionTotalOverflow` gracefully when
+/// the aggregate option total would exceed `u32::MAX`, rather than panicking.
+///
+/// Test setup: we use the test-only `storage::set_option_total_votes_for_test`
+/// helper to position the running counter just below overflow.  Then one more
+/// `cast_vote` call tries to add 1, which would overflow — and the contract
+/// must return the new typed error.
+///
+/// We need a round with a single option and enough credits to cast at least 1
+/// vote.  We prime the OptionTotalVotes key directly instead of calling
+/// cast_vote billions of times.
+#[test]
+fn test_option_total_overflow_returns_typed_error() {
+    let (env, client, alice, _, _) = setup();
+
+    // Create a round with 1 option, 1 credit per voter (minimum cast).
+    let round_id = client.create_round(&alice, &vec![&env, 1u32], &1u64);
+
+    // Prime the option aggregate counter to u32::MAX so the next +1 would overflow.
+    // Must be called inside the contract context (env.as_contract).
+    env.as_contract(&client.address, || {
+        crate::storage::set_option_total_votes_for_test(&env, round_id, 1u32, u32::MAX);
+    });
+
+    // Now try to cast 1 vote — the voter has 1 credit (cost = 1² = 1, OK), but
+    // the option aggregate would overflow.
+    let err = client
+        .try_cast_vote(&alice, &round_id, &1u32, &1u32)
+        .unwrap_err()
+        .unwrap();
+
+    assert_eq!(
+        err,
+        QVError::OptionTotalOverflow,
+        "expected OptionTotalOverflow, got {err:?}"
+    );
+}
+
+// ─── IMPROVEMENT 1: MAX_OPTIONS cap ───────────────────────────────────────────
+
+/// A round with exactly MAX_OPTIONS options must succeed.
+#[test]
+fn test_create_round_at_max_options_succeeds() {
+    let (env, client, alice, _, _) = setup();
+
+    let mut opts = soroban_sdk::Vec::new(&env);
+    for i in 0..crate::MAX_OPTIONS {
+        opts.push_back(i);
+    }
+
+    // Should not return an error.
+    let round_id = client.create_round(&alice, &opts, &100u64);
+    let info = client.get_round_info(&round_id);
+    assert_eq!(info.option_ids.len(), crate::MAX_OPTIONS);
+}
+
+/// A round with MAX_OPTIONS + 1 options must be rejected with TooManyOptions.
+#[test]
+fn test_create_round_over_max_options_rejected() {
+    let (env, client, alice, _, _) = setup();
+
+    let mut opts = soroban_sdk::Vec::new(&env);
+    for i in 0..=crate::MAX_OPTIONS {
+        // MAX_OPTIONS + 1 elements
+        opts.push_back(i);
+    }
+
+    let err = client
+        .try_create_round(&alice, &opts, &100u64)
+        .unwrap_err()
+        .unwrap();
+
+    assert_eq!(
+        err,
+        QVError::TooManyOptions,
+        "expected TooManyOptions, got {err:?}"
+    );
+}
+
+// ─── IMPROVEMENT 2: get_voter_option_votes public getter ──────────────────────
+
+/// Returns 0 for a voter who has not voted on that option.
+#[test]
+fn test_get_voter_option_votes_before_any_vote() {
+    let (env, client, alice, bob, _) = setup();
+    let r = create_standard_round(&client, &env, &alice);
+
+    // Bob has not voted at all.
+    assert_eq!(client.get_voter_option_votes(&r, &bob, &1u32), 0);
+}
+
+/// Returns the correct cumulative total after multiple cast_vote calls on the
+/// same option by the same voter.
+#[test]
+fn test_get_voter_option_votes_accumulates_correctly() {
+    let (env, client, alice, _, _) = setup();
+    let r = create_standard_round(&client, &env, &alice);
+
+    // First call: 3 votes on option 1.
+    client.cast_vote(&alice, &r, &1u32, &3u32);
+    assert_eq!(client.get_voter_option_votes(&r, &alice, &1u32), 3);
+
+    // Second call: 2 more votes on option 1 → cumulative total = 5.
+    client.cast_vote(&alice, &r, &1u32, &2u32);
+    assert_eq!(client.get_voter_option_votes(&r, &alice, &1u32), 5);
+
+    // Option 2 is still 0 for Alice.
+    assert_eq!(client.get_voter_option_votes(&r, &alice, &2u32), 0);
+}
+
+/// Returns RoundNotFound for a non-existent round.
+#[test]
+fn test_get_voter_option_votes_round_not_found() {
+    let (env, client, alice, _, _) = setup();
+    let _r = create_standard_round(&client, &env, &alice);
+
+    let err = client
+        .try_get_voter_option_votes(&999u64, &alice, &1u32)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, QVError::RoundNotFound);
+}

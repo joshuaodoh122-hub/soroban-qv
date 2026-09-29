@@ -24,8 +24,8 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 rustup target add wasm32v1-none
 
 # Clone and build
-git clone https://github.com/your-org/soroban-qv
-cd soroban-qv
+git clone https://github.com/joshuaodoh122-hub/soroban-qv-core
+cd soroban-qv-core
 cargo build --workspace --all-features
 ```
 

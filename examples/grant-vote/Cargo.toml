@@ -14,7 +14,7 @@ soroban-sdk = { workspace = true }
 soroban-qv-core = { path = "../../contracts/qv-core" }
 
 [dev-dependencies]
-soroban-sdk = { version = "22.0.7", features = ["testutils"] }
+soroban-sdk = { version = "=22.0.7", features = ["testutils"] }
 soroban-qv-core = { path = "../../contracts/qv-core", features = ["testutils"] }
 
 [features]
