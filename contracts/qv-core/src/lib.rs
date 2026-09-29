@@ -39,9 +39,24 @@ use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, Vec};
 
 use storage::{
     add_option_votes, get_round, get_voter_credits_remaining, get_voter_option_votes,
-    has_voted_on_option, next_round_id, save_round, set_voter_credits_remaining,
+    is_voter_initialised, next_round_id, save_round, set_voter_credits_remaining,
     set_voter_option_votes,
 };
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+/// Maximum number of options allowed per round.
+///
+/// The duplicate-option check in `create_round` is O(n²) over the option list.
+/// Soroban CPU instruction budgets make unbounded O(n²) loops dangerous.
+/// At 50 options the inner loop runs at most 1 225 iterations, which is
+/// well within Soroban's per-transaction instruction limit (currently ~100M).
+/// At 100 options it would be ~5 000 iterations — still safe, but the margin
+/// shrinks quickly beyond that, especially in combination with the rest of
+/// `create_round` logic.  50 is a practical ceiling for any real governance
+/// round (any round requiring more than 50 distinct options is almost certainly
+/// a UI/UX problem, not a governance requirement).
+pub const MAX_OPTIONS: u32 = 50;
 
 // ─── Contract ────────────────────────────────────────────────────────────────
 
@@ -57,6 +72,7 @@ impl QVContract {
     /// # Arguments
     /// * `admin`             – The address authorised to close this round. Must sign.
     /// * `option_ids`        – Non-empty list of distinct `u32` option identifiers.
+    ///                         Must not exceed [`MAX_OPTIONS`] entries.
     /// * `credits_per_voter` – Voice credits allocated to each voter on first vote.
     ///
     /// # Returns
@@ -64,6 +80,7 @@ impl QVContract {
     ///
     /// # Errors
     /// * [`QVError::NoOptions`]       – `option_ids` is empty.
+    /// * [`QVError::TooManyOptions`]  – `option_ids` exceeds [`MAX_OPTIONS`].
     /// * [`QVError::DuplicateOption`] – `option_ids` contains duplicates.
     /// * [`QVError::ZeroCredits`]     – `credits_per_voter` is zero.
     pub fn create_round(
@@ -77,11 +94,14 @@ impl QVContract {
         if option_ids.is_empty() {
             return Err(QVError::NoOptions);
         }
+        if option_ids.len() > MAX_OPTIONS {
+            return Err(QVError::TooManyOptions);
+        }
         if credits_per_voter == 0 {
             return Err(QVError::ZeroCredits);
         }
 
-        // Check for duplicate option IDs (O(n²) — option lists are expected small).
+        // Check for duplicate option IDs (O(n²) — bounded by MAX_OPTIONS above).
         let len = option_ids.len();
         for i in 0..len {
             for j in (i + 1)..len {
@@ -163,13 +183,14 @@ impl QVContract {
     /// * `num_votes` – Additional votes to cast (must be ≥ 1).
     ///
     /// # Errors
-    /// * [`QVError::RoundNotFound`]       – No round with `round_id`.
-    /// * [`QVError::RoundNotOpen`]        – Round is closed.
-    /// * [`QVError::InvalidOption`]       – `option_id` not in this round.
-    /// * [`QVError::ZeroVotes`]           – `num_votes` is 0.
-    /// * [`QVError::VoteCountOverflow`]   – Accumulated votes would overflow `u32`.
-    /// * [`QVError::CostOverflow`]        – Quadratic cost overflows `u64`.
-    /// * [`QVError::InsufficientCredits`] – Voter lacks enough voice credits.
+    /// * [`QVError::RoundNotFound`]        – No round with `round_id`.
+    /// * [`QVError::RoundNotOpen`]         – Round is closed.
+    /// * [`QVError::InvalidOption`]        – `option_id` not in this round.
+    /// * [`QVError::ZeroVotes`]            – `num_votes` is 0.
+    /// * [`QVError::VoteCountOverflow`]    – Accumulated votes would overflow `u32`.
+    /// * [`QVError::CostOverflow`]         – Quadratic cost overflows `u64`.
+    /// * [`QVError::InsufficientCredits`]  – Voter lacks enough voice credits.
+    /// * [`QVError::OptionTotalOverflow`]  – Option aggregate total would overflow `u32`.
     pub fn cast_vote(
         env: Env,
         voter: Address,
@@ -196,7 +217,7 @@ impl QVContract {
         }
 
         // Initialise voice credits for first-time voters in this round.
-        let credits_remaining = if has_voted_on_option(&env, round_id, &voter) {
+        let credits_remaining = if is_voter_initialised(&env, round_id, &voter) {
             get_voter_credits_remaining(&env, round_id, &voter)
         } else {
             round.credits_per_voter
@@ -237,7 +258,7 @@ impl QVContract {
         set_voter_credits_remaining(&env, round_id, &voter, new_credits);
 
         // Update the option's running total (delta = num_votes, not new_total).
-        add_option_votes(&env, round_id, option_id, num_votes);
+        add_option_votes(&env, round_id, option_id, num_votes)?;
 
         env.events().publish(
             (symbol_short!("qv"), symbol_short!("vote")),
@@ -281,10 +302,31 @@ impl QVContract {
     /// * [`QVError::RoundNotFound`] – No round with `round_id`.
     pub fn get_voter_credits(env: Env, round_id: u64, voter: Address) -> Result<u64, QVError> {
         let round = get_round(&env, round_id).ok_or(QVError::RoundNotFound)?;
-        if has_voted_on_option(&env, round_id, &voter) {
+        if is_voter_initialised(&env, round_id, &voter) {
             Ok(get_voter_credits_remaining(&env, round_id, &voter))
         } else {
             Ok(round.credits_per_voter)
         }
+    }
+
+    /// Return the number of votes a specific voter has cast on a specific option.
+    ///
+    /// Returns `0` if the voter has not cast any votes on that option yet.
+    /// This can be used by a voting UI to show a voter their own ballot.
+    ///
+    /// # Errors
+    /// * [`QVError::RoundNotFound`] – No round with `round_id`.
+    pub fn get_voter_option_votes(
+        env: Env,
+        round_id: u64,
+        voter: Address,
+        option_id: u32,
+    ) -> Result<u32, QVError> {
+        // Confirm the round exists before querying (consistent error behaviour
+        // with the other getters — avoids silently returning 0 for bogus IDs).
+        get_round(&env, round_id).ok_or(QVError::RoundNotFound)?;
+        Ok(storage::get_voter_option_votes(
+            &env, round_id, &voter, option_id,
+        ))
     }
 }

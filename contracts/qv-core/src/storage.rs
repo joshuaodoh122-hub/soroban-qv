@@ -6,6 +6,7 @@
 
 use soroban_sdk::{contracttype, Address, Env, Vec};
 
+use crate::errors::QVError;
 use crate::types::RoundInfo;
 
 // ─── Storage keys ─────────────────────────────────────────────────────────────
@@ -58,10 +59,14 @@ pub fn get_round(env: &Env, round_id: u64) -> Option<RoundInfo> {
 
 // ─── Voter credit ledger ────────────────────────────────────────────────────────
 
-/// Returns true if the voter has been initialised for this round (i.e. has
-/// cast at least one vote).  Used to distinguish "full allocation" from
-/// "zero remaining after spending all credits".
-pub fn has_voted_on_option(env: &Env, round_id: u64, voter: &Address) -> bool {
+/// Returns `true` if the voter has been initialised for this round (i.e. has
+/// cast at least one vote in it).
+///
+/// Used to distinguish "voter has never voted → return full allocation" from
+/// "voter has voted and may have zero credits left → return the stored value".
+/// The sentinel key `VoterInitialised` is written on first `set_voter_credits_remaining`
+/// call, regardless of how many credits are left.
+pub fn is_voter_initialised(env: &Env, round_id: u64, voter: &Address) -> bool {
     env.storage()
         .persistent()
         .has(&DataKey::VoterInitialised(round_id, voter.clone()))
@@ -98,6 +103,19 @@ pub fn get_voter_option_votes(env: &Env, round_id: u64, voter: &Address, option_
         .unwrap_or(0u32)
 }
 
+/// Persist the cumulative vote count for a (voter, option) pair.
+///
+/// This function stores only the per-voter record.  The option-level aggregate
+/// is maintained separately by `add_option_votes`, which must be called in the
+/// same transaction (as `cast_vote` does) to keep the two counters consistent:
+///
+/// - `VoterOptionVotes(round, voter, option)` — how many votes *this voter*
+///   has cast on *this option* (cumulative, used for marginal QV cost computation).
+/// - `OptionTotalVotes(round, option)` — running sum across *all voters* on
+///   *this option* (used by `get_results` / `tally_votes` for O(options) tallying).
+///
+/// Always call `add_option_votes` with the delta (not the new cumulative total)
+/// immediately after this call.
 pub fn set_voter_option_votes(
     env: &Env,
     round_id: u64,
@@ -105,21 +123,10 @@ pub fn set_voter_option_votes(
     option_id: u32,
     votes: u32,
 ) {
-    // Update per-voter-option record.
     env.storage().persistent().set(
         &DataKey::VoterOptionVotes(round_id, voter.clone(), option_id),
         &votes,
     );
-
-    // Update the option's running total (used for efficient tallying).
-    // We recompute from per-voter records to avoid double-counting bugs.
-    // Because we store `new_total` (not a delta), we cannot simply add here —
-    // we must read the old per-voter record and apply the delta to the tally.
-    //
-    // The caller (cast_vote) has already validated the transition, so we rely
-    // on it passing `votes` = new total and the previous value being the old total.
-    // To keep this function simple, we let tally_votes scan per-option; for large
-    // rounds, integrators should maintain their own aggregate or use a custom index.
 }
 
 // ─── Vote tallying ──────────────────────────────────────────────────────────────
@@ -143,17 +150,41 @@ pub fn tally_votes(env: &Env, round_id: u64, option_ids: &Vec<u32>) -> Vec<(u32,
     results
 }
 
-/// Update the running option-total vote count.
+/// Increment the running per-option vote total by `delta`.
 ///
-/// Called by `cast_vote` *after* updating the per-voter record, passing the
-/// delta (number of new votes being added in this call, not the cumulative total).
-pub fn add_option_votes(env: &Env, round_id: u64, option_id: u32, delta: u32) {
+/// Called by `cast_vote` after updating the per-voter record, passing the
+/// number of new votes being added in this call (not the cumulative total).
+///
+/// # Errors
+/// Returns [`QVError::OptionTotalOverflow`] if adding `delta` would overflow
+/// `u32`.  In practice this requires over 4 billion aggregate votes on a single
+/// option, which is economically implausible given quadratic costs — but the
+/// contract returns a typed error rather than panicking.
+pub fn add_option_votes(
+    env: &Env,
+    round_id: u64,
+    option_id: u32,
+    delta: u32,
+) -> Result<(), QVError> {
     let key = DataKey::OptionTotalVotes(round_id, option_id);
     let current: u32 = env.storage().persistent().get(&key).unwrap_or(0u32);
-    // Overflow here would require 2^32 votes on a single option — treat as
-    // a hard error rather than silently wrapping.
     let new_total = current
         .checked_add(delta)
-        .expect("option vote total overflow");
+        .ok_or(QVError::OptionTotalOverflow)?;
     env.storage().persistent().set(&key, &new_total);
+    Ok(())
+}
+
+// ─── Test-only helpers ──────────────────────────────────────────────────────────
+
+/// Directly write the option total vote counter.
+///
+/// **For test setup only** — allows tests to position the counter near
+/// `u32::MAX` without running an impractically large number of `cast_vote`
+/// calls.  Not compiled into production WASM.
+#[cfg(test)]
+pub fn set_option_total_votes_for_test(env: &Env, round_id: u64, option_id: u32, total: u32) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::OptionTotalVotes(round_id, option_id), &total);
 }

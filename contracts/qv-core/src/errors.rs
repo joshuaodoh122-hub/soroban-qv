@@ -17,6 +17,12 @@ pub enum QVError {
     DuplicateOption = 2,
     /// `credits_per_voter` was zero.
     ZeroCredits = 3,
+    /// `option_ids` exceeded [`crate::MAX_OPTIONS`].
+    ///
+    /// This cap protects the O(n²) duplicate check in `create_round` from
+    /// consuming excessive CPU instructions within Soroban's per-transaction
+    /// budget.
+    TooManyOptions = 13,
 
     // ── Round lookup / state errors ───────────────────────────────────────
     /// No round exists with the given `round_id`.
@@ -39,4 +45,11 @@ pub enum QVError {
     CostOverflow = 10,
     /// Voter does not have enough voice credits to cover the quadratic cost.
     InsufficientCredits = 11,
+    /// The accumulated total vote count for a single option overflowed `u32`.
+    ///
+    /// This can only occur if votes from many different voters on the same
+    /// option collectively exceed `u32::MAX` (~4.29 billion).  Per-voter
+    /// overflow is caught earlier by `VoteCountOverflow`; this variant covers
+    /// the cross-voter aggregate maintained by `add_option_votes`.
+    OptionTotalOverflow = 12,
 }
